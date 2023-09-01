@@ -57,16 +57,16 @@ jobs:
 
     - name: "Package manager performance improvements"
       run: |
-        sudo sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
-        echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
-        sudo dpkg-reconfigure man-db
-        sudo sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
+        sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
+        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
+        dpkg-reconfigure man-db
+        sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
 
     - name: "Install build dependencies based CI packages"
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends build-essential devscripts equivs quilt libpam0g-dev sshpass
-        sudo mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
+        apt-get update
+        apt-get install -y --no-install-recommends build-essential devscripts equivs quilt libpam0g-dev sshpass
+        mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
 
     - name: "Build DEBs"
       run: |
@@ -74,35 +74,35 @@ jobs:
 
     - name: "Install .deb packages"
       run: |
-        sudo dpkg -i ../libpam*deb
+        dpkg -i ../libpam*deb
 
     - name: "Show infos of the .deb package"
       run: |
-        sudo dpkg -s libpam-radius-auth
+        dpkg -s libpam-radius-auth
 
     - name: "List content of the .deb package"
       run: |
-        sudo dpkg -L libpam-radius-auth
+        dpkg -L libpam-radius-auth
 
     - name: "Create the CI_TEST_USER user in /etc/passwd (no-password)"
       run: |
-        sudo useradd -d /tmp ${CI_TEST_USER}
+        useradd -d /tmp ${CI_TEST_USER}
         id ${CI_TEST_USER}
 
     - name: "Setup FreeRADIUS/SSHD/SYSLOG-NG/PAM then run full CI tests"
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
+        apt-get update
+        apt-get install -y --no-install-recommends \
                           freeradius freeradius-utils freeradius-config \
                           syslog-ng \
                           openssh-server sshpass
 
         echo "#######################################################"
         echo "## Stop the services syslog-ng/sshd/freeradius"
-        sudo rm -f /var/log/auth.log # Needed to see the last results
-        sudo systemctl restart syslog-ng
-        sudo systemctl stop ssh
-        sudo systemctl stop freeradius
+        rm -f /var/log/auth.log # Needed to see the last results
+        systemctl restart syslog-ng
+        systemctl stop ssh
+        systemctl stop freeradius
 
         echo "#######################################################"
         echo "## Setup the services"
@@ -111,13 +111,13 @@ jobs:
             script="./scripts/ci/$i"
 
             echo "Calling $i"
-            sudo -E $script
+            -E $script
         done
 
         echo "#######################################################"
         echo "## Start the services syslog-ng/sshd/freeradius"
-        sudo systemctl start ssh
-        sudo systemctl start freeradius
+        systemctl start ssh
+        systemctl start freeradius
 
         echo "#######################################################"
         echo "## Show processes"
@@ -125,15 +125,15 @@ jobs:
 
     - name: "Content of /etc/ssh/sshd_config"
       run: |
-        sudo cat /etc/ssh/sshd_config
+        cat /etc/ssh/sshd_config
 
     - name: "Content of /etc/pam.d/sshd"
       run: |
-        sudo cat /etc/pam.d/sshd
+        cat /etc/pam.d/sshd
 
     - name: "Content of /etc/pam_radius_auth.conf"
       run: |
-        sudo cat /etc/pam_radius_auth.conf
+        cat /etc/pam_radius_auth.conf
 
     - name: "Validate freeradius instance using radtest"
       run: |
@@ -145,7 +145,7 @@ jobs:
           /usr/bin/ssh -T -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -p 22 ${CI_TEST_USER}@localhost id; then
             echo "ERROR: Something goes wrong with the SSH + PAM_RADIUS authentication!"
             echo "############## Show the logs in /var/log/auth.log"
-            sudo tail -35 /var/log/auth.log
+            tail -35 /var/log/auth.log
             exit 1
         fi
 
@@ -153,9 +153,9 @@ jobs:
       run: |
         echo "#######################################################"
         echo "## Show the logs in /var/log/auth.log"
-        sudo cat -n /var/log/auth.log
+        cat -n /var/log/auth.log
 
-        if ! sudo grep -q "pam_radius_auth: authentication succeeded" /var/log/auth.log; then
+        if ! grep -q "pam_radius_auth: authentication succeeded" /var/log/auth.log; then
           echo "ERROR: Something goes wrong with the SSH + PAM_RADIUS authentication!"
           exit 1
         fi
