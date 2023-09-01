@@ -27,39 +27,49 @@ jobs:
     #  If branch protection is in place with status checks enabled, ensure
     #  names are updated if new matrix entries are added or the name format
     #  changes.
-    name: "DEB Build (ubuntu-20.04)"
+    name: "DEB Build (${{ matrix.env.NAME }})"
 
     needs: pre-ci
     if: ${{ needs.pre-ci.outputs.should_skip != 'true' }}
 
-    runs-on: "ubuntu-20.04"
+    runs-on: ubuntu-latest
+
+    container:
+      image: ${{ matrix.env.OS }}
 
     strategy:
       fail-fast: false
+      matrix:
+        env:
+          - { NAME: "ubuntu-20.04", OS: "ubuntu:20.04" }
+          - { NAME: "ubuntu-22.04", OS: "ubuntu:22.04" }
+          - { NAME: "debian-10", OS: "debian:buster" }
+          - { NAME: "debian-11", OS: "debian:bullseye" }
+          - { NAME: "debian-12", OS: "debian:bookworm" }
 
     steps:
 
     # Checkout, but defer pulling LFS objects until we've restored the cache
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
       with:
         lfs: false
 
     - name: "Package manager performance improvements"
       run: |
-        sudo sh -c 'echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/02speedup'
-        echo 'man-db man-db/auto-update boolean false' | sudo debconf-set-selections
-        sudo dpkg-reconfigure man-db
-        sudo sed -i 's/^update_initramfs=.*/update_initramfs=no/' /etc/initramfs-tools/update-initramfs.conf
+        if [ -f "/etc/apt/sources.list" ]; then
+        sed -i 's/deb.debian.org/debian-archive.trafficmanager.net/' /etc/apt/sources.list
+        sed -i 's/archive.ubuntu.com/azure.archive.ubuntu.com/' /etc/apt/sources.list
+        fi
+        echo 'Acquire::Retries "10";' > /etc/apt/apt.conf.d/80-retries
+        echo 'force-unsafe-io' > /etc/dpkg/dpkg.cfg.d/02speedup
+        echo 'man-db man-db/auto-update boolean false' | debconf-set-selections
+        apt-get update
 
     - name: "Install build dependencies based CI packages"
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends build-essential devscripts equivs quilt libpam0g-dev sshpass
-        sudo mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
-
-    - name: "Set compiler to GCC 10"
-      run: |
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-10 60 && sudo update-alternatives --set gcc /usr/bin/gcc-10
+        apt-get update
+        apt-get install -y --no-install-recommends build-essential devscripts equivs quilt libpam0g-dev sshpass
+        mk-build-deps -irt"apt-get -y --no-install-recommends" scripts/ci/extra-packages.debian.control
 
     - name: "Build DEBs"
       run: |
@@ -67,35 +77,35 @@ jobs:
 
     - name: "Install .deb packages"
       run: |
-        sudo dpkg -i ../libpam*deb
+        dpkg -i ../libpam*deb
 
     - name: "Show infos of the .deb package"
       run: |
-        sudo dpkg -s libpam-radius-auth
+        dpkg -s libpam-radius-auth
 
     - name: "List content of the .deb package"
       run: |
-        sudo dpkg -L libpam-radius-auth
+        dpkg -L libpam-radius-auth
 
     - name: "Create the CI_TEST_USER user in /etc/passwd (no-password)"
       run: |
-        sudo useradd -d /tmp ${CI_TEST_USER}
+        useradd -d /tmp ${CI_TEST_USER}
         id ${CI_TEST_USER}
 
     - name: "Setup FreeRADIUS/SSHD/SYSLOG-NG/PAM then run full CI tests"
       run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends \
+        apt-get update
+        apt-get install -y --no-install-recommends \
                           freeradius freeradius-utils freeradius-config \
                           syslog-ng \
                           openssh-server sshpass
 
         echo "#######################################################"
         echo "## Stop the services syslog-ng/sshd/freeradius"
-        sudo rm -f /var/log/auth.log # Needed to see the last results
-        sudo systemctl restart syslog-ng
-        sudo systemctl stop ssh
-        sudo systemctl stop freeradius
+        rm -f /var/log/auth.log # Needed to see the last results
+        pkill -9 syslog-ng || :
+        pkill -9 ssh || :
+        pkill -9 freeradius || :
 
         echo "#######################################################"
         echo "## Setup the services"
@@ -104,13 +114,14 @@ jobs:
             script="./scripts/ci/$i"
 
             echo "Calling $i"
-            sudo -E $script
+            sh $script
         done
 
         echo "#######################################################"
         echo "## Start the services syslog-ng/sshd/freeradius"
-        sudo systemctl start ssh
-        sudo systemctl start freeradius
+        /usr/sbin/sshd
+        /usr/sbin/freeradius
+        /usr/sbin/syslog-ng --no-caps
 
         echo "#######################################################"
         echo "## Show processes"
@@ -118,15 +129,15 @@ jobs:
 
     - name: "Content of /etc/ssh/sshd_config"
       run: |
-        sudo cat /etc/ssh/sshd_config
+        cat /etc/ssh/sshd_config
 
     - name: "Content of /etc/pam.d/sshd"
       run: |
-        sudo cat /etc/pam.d/sshd
+        cat /etc/pam.d/sshd
 
     - name: "Content of /etc/pam_radius_auth.conf"
       run: |
-        sudo cat /etc/pam_radius_auth.conf
+        cat /etc/pam_radius_auth.conf
 
     - name: "Validate freeradius instance using radtest"
       run: |
@@ -138,7 +149,7 @@ jobs:
           /usr/bin/ssh -T -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no -p 22 ${CI_TEST_USER}@localhost id; then
             echo "ERROR: Something goes wrong with the SSH + PAM_RADIUS authentication!"
             echo "############## Show the logs in /var/log/auth.log"
-            sudo tail -35 /var/log/auth.log
+            tail -35 /var/log/auth.log
             exit 1
         fi
 
@@ -146,9 +157,9 @@ jobs:
       run: |
         echo "#######################################################"
         echo "## Show the logs in /var/log/auth.log"
-        sudo cat -n /var/log/auth.log
+        cat -n /var/log/auth.log
 
-        if ! sudo grep -q "pam_radius_auth: authentication succeeded" /var/log/auth.log; then
+        if ! grep -q "pam_radius_auth: authentication succeeded" /var/log/auth.log; then
           echo "ERROR: Something goes wrong with the SSH + PAM_RADIUS authentication!"
           exit 1
         fi
