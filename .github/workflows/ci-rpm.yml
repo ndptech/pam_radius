@@ -41,7 +41,8 @@ jobs:
       matrix:
         env:
           - { NAME: "centos-7", OS: "centos:7", DIST: "centos" }
-          - { NAME: "centos-8", OS: "centos:8", DIST: "centos" }
+          - { NAME: "rocky-8", OS: "rockylinux/rockylinux:8", DIST: "rocky" }
+          - { NAME: "rocky-9", OS: "rockylinux/rockylinux:9", DIST: "rocky" }
 
     steps:
 
@@ -50,12 +51,29 @@ jobs:
     - name: "Install recent git for CentOS 7"
       if: ${{ matrix.env.NAME == 'centos-7' }}
       run: |
-        yum install -y https://packages.endpoint.com/rhel/7/os/x86_64/git-core-2.24.1-1.ep7.x86_64.rpm
+        yum install -y https://packages.endpointdev.com/rhel/7/os/x86_64/git-core-2.30.1-1.ep7.x86_64.rpm
 
-    - name: "Install distro git for CentOS > 7"
-      if: ${{ matrix.env.NAME != 'centos-7' }}
+    - name: "Install distro git for Rocky"
+      if: ${{ matrix.env.DIST == 'rocky' }}
       run: |
-        yum install -y git-core
+        yum install -y git-core procps-ng
+
+    # Checkout, but defer pulling LFS objects until we've restored the cache
+    - uses: actions/checkout@v3
+      with:
+        path: pam_radius
+
+    - name: "Enable PowerTools on CentOS 8"
+      if: ${{ matrix.env.NAME == 'centos-8' || matrix.env.NAME == 'rocky-8' }}
+      run: |
+        yum config-manager --enable PowerTools || :
+        yum config-manager --enable powertools || :
+
+    - name: "Enable Code Ready Builder on Rocky 9."
+      if: ${{ matrix.env.NAME == 'rocky-9' }}
+      run: |
+        yum install -y yum-utils
+        yum config-manager --enable crb
 
     - name: "Install common tools"
       run: |
@@ -69,59 +87,20 @@ jobs:
           psmisc \
           sudo
 
-    - name: "Install SCL compiler on CentOS 7"
-      if: ${{ matrix.env.NAME == 'centos-7' }}
-      run: |
-        yum install -y centos-release-scl
-        yum install -y devtoolset-8-gcc devtoolset-8-gcc-c++ devtoolset-8-make
-        rm -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-        rm -f /etc/yum.repos.d/CentOS-SCLo-scl.repo
-
-    # Checkout, but defer pulling LFS objects until we've restored the cache
-    - uses: actions/checkout@v2
-      with:
-        lfs: false
-
-    - name: "Install SCL compiler on CentOS 7"
-      if: ${{ matrix.env.NAME == 'centos-7' }}
-      run: |
-        yum install -y centos-release-scl
-        yum install -y devtoolset-8-gcc devtoolset-8-gcc-c++ devtoolset-8-make
-        rm -f /etc/yum.repos.d/CentOS-SCLo-scl-rh.repo
-        rm -f /etc/yum.repos.d/CentOS-SCLo-scl.repo
-
-    - name: "Extra repos for CentOS and Rocky Linux"
-      if: ${{ startsWith(matrix.env.NAME, 'centos-') }}
-      run: |
-        echo '[ltb-project]'                                              >  /etc/yum.repos.d/ltb-project.repo
-        echo 'name=LTB project packages'                                  >> /etc/yum.repos.d/ltb-project.repo
-        echo 'baseurl=https://ltb-project.org/rpm/$releasever/$basearch'  >> /etc/yum.repos.d/ltb-project.repo
-        echo 'enabled=1'                                                  >> /etc/yum.repos.d/ltb-project.repo
-        echo 'gpgcheck=1'                                                 >> /etc/yum.repos.d/ltb-project.repo
-        echo 'gpgkey=https://ltb-project.org/lib/RPM-GPG-KEY-LTB-project' >> /etc/yum.repos.d/ltb-project.repo
-        rpm --import https://ltb-project.org/lib/RPM-GPG-KEY-LTB-project
-        yum install -y epel-release
-
-    - name: "Enable PowerTools on CentOS 8"
-      if: ${{ matrix.env.NAME == 'centos-8' }}
-      run: |
-        yum install -y yum-utils
-        yum config-manager --enable PowerTools || :
-        yum config-manager --enable powertools || :
-
     - name: "Install build dependencies"
       run: |
-        yum-builddep -y redhat/pam_radius_auth.spec
+        yum-builddep -y pam_radius/redhat/pam_radius_auth.spec
 
     - name: "Build RPMs"
       run: |
         [ -r /opt/rh/devtoolset-8/enable ] && source /opt/rh/devtoolset-8/enable || :
         make rpm
+      working-directory: pam_radius
 
     - name: "Collect RPMs"
       run: |
         mkdir -p rpms/
-        mv rpmbuild/RPMS/x86_64/*.rpm rpms/
+        mv pam_radius/rpmbuild/RPMS/x86_64/*.rpm rpms/
 
     - name: "Install .rpm packages"
       run: |
@@ -137,33 +116,33 @@ jobs:
 
     - name: "Create the CI_TEST_USER user in /etc/passwd (no-password)"
       run: |
-        sudo useradd -d /tmp ${CI_TEST_USER}
+        useradd -d /tmp ${CI_TEST_USER}
         id ${CI_TEST_USER}
 
-    - name: "Setup FreeRADIUS/SSHD/SYSLOG-NG/PAM then run full CI tests"
+    - name: "Setup FreeRADIUS/SSHD/RSYSLOG/PAM then run full CI tests"
       run: |
-        sudo yum -y update
-        sudo yum -y install \
-                freeradius freeradius-utils \
-                syslog-ng \
-                openssh-server sshpass
+        yum -y update
+        yum -y install \
+          freeradius freeradius-utils \
+          rsyslog \
+          openssh-server sshpass
 
         echo "#######################################################"
-        echo "## Stop the services syslog-ng/sshd/freeradius"
+        echo "## Stop the services rsyslog/sshd/freeradius"
         ( sudo rm -f /var/log/secure && \
           sudo touch /var/log/secure && \
           sudo chmod 600 /var/log/secure
         )
-        sudo killall -q -9 syslog-ng radiusd sshd || :
+        sudo killall -q -9 radiusd sshd || :
         # https://stackoverflow.com/questions/47973554/how-to-let-syslog-workable-in-docker
-        sudo sed -i 's/system()/# system()/g' /etc/syslog-ng/syslog-ng.conf
-        sudo /usr/sbin/syslog-ng --no-caps
+        #sudo sed -i 's/system()/# system()/g' /etc/syslog-ng/syslog-ng.conf
+        #sudo /usr/sbin/syslog-ng --no-caps
 
         echo "#######################################################"
         echo "## Setup the services"
         export CI_TEST_USER="$CI_TEST_USER" CI_TEST_PASS="$CI_TEST_PASS"
         for i in setup-pam_radius.sh setup-freeradius.sh setup-sshd.sh; do
-            script="${PWD}/scripts/ci/$i"
+            script="${PWD}/pam_radius/scripts/ci/$i"
 
             echo "Calling $script"
             sudo -E $script
